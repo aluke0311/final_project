@@ -1,0 +1,259 @@
+---
+title: "Untitled"
+author: "Alina Luke"
+date: "4/26/2018"
+output: html_document
+---
+
+```{r}
+# set working drive
+setwd("/Users/alinaluke/Google Drive/MACC Data All Projects/ADA")
+
+# read in data
+macc <- read.csv("/Users/alinaluke/Google Drive/MACC Data All Projects/ADA/MACCdata_fromR_ada.csv")
+```
+
+
+```{r}
+# load necessary packages
+library(survminer)#for pairwise diffs
+library(survival) #for calculating KM values
+library(ggfortify) #for KM curves
+library(readxl) # for reading in excel file
+library(ggplot2) # for plotting KM curve
+library(tidyverse) # for various packages
+library(lmtest) #model comparison
+library(stargazer) #models presentation
+```
+
+```{r}
+# create parent smoke in youth variable 
+macc$parentsmoke <- as.factor(macc$parentsmoke)
+summary(macc$parentsmoke)
+```
+
+
+```{r}
+# create nonwhite variable
+
+summary(macc$ETHNICITY)
+macc$nonwhite[macc$ETHNICITY=="(1) African American or Black"] <- 1
+macc$nonwhite[macc$ETHNICITY=="(2) American Indian or Alaskan Native"] <- 1
+macc$nonwhite[macc$ETHNICITY=="(3) Asian"] <- 1
+macc$nonwhite[macc$ETHNICITY=="(4) Hispanic or Latino"] <- 1
+macc$nonwhite[macc$ETHNICITY=="(5) White"] <- 0
+macc$nonwhite[macc$ETHNICITY=="(6) other"] <- 1
+macc$nonwhite <- as.factor(macc$nonwhite)
+summary(macc$nonwhite)
+```
+
+```{r}
+# create subset from 25 survey
+macc25 <- macc[ which(macc$SURVEY=="(25) r25"), ]
+```
+
+```{r}
+# create a merged dataset with variables I need
+myvars <- c("MASTERID", "SURVEY", "ever_smoke", "smoke_init", "SEX_CAL", "nonwhite", "AGE_YRS")
+macc25sub <- macc25[myvars]
+
+macc01 <- macc[ which(macc$SURVEY=="(01) bl"& macc$ever_smoke==0), ]
+myvars <- c("MASTERID", "SURVEY", "Q0710", "Q0720","parentsmoke")
+macc01sub <- macc01[myvars]
+
+mm <- merge(macc01sub, macc25sub,by="MASTERID")
+names(mm)
+```
+
+```{r}
+# age by survey
+tapply(macc$AGE_YRS, macc$SURVEY, summary)
+```
+
+
+
+```{r}
+# create smoke-free home variable
+mm$sfh[mm$Q0710=="(5) no" & is.na(mm$Q0720)] <- 1
+mm$sfh[mm$Q0720=="(5) no" & is.na(mm$Q0710)] <- 1
+mm$sfh[mm$Q0720=="(5) no" & mm$Q0710=="(5) no"] <- 1
+mm$sfh[is.na(mm$Q0720) & is.na(mm$Q0710)] <- NA
+mm$sfh[mm$Q0710=="(1) yes" & mm$Q0720=="(1) yes"] <- 0
+mm$sfh[mm$Q0710=="(5) no" & mm$Q0720=="(1) yes"] <- 0
+mm$sfh[mm$Q0720=="(5) no" & mm$Q0710=="(1) yes"] <- 0
+mm$sfh <- as.factor(mm$sfh)
+summary(mm$sfh)
+mm$sfh2 <- factor(mm$sfh,
+levels = c(0,1),
+labels = c("No SFH", "SFH"))
+table(mm$sfh2)
+prop.table(table(mm$sfh2))
+```
+
+```{r}
+table(mm$parentsmoke)
+prop.table(table(mm$parentsmoke))
+```
+```{r}
+# smoke initiation variable for cox
+mm$smoke_init_2 <- mm$smoke_init
+mm$smoke_init_2[is.na(mm$smoke_init)] <- mm$AGE_YRS
+mm$smoke_init_2[!is.na(mm$smoke_init)] <- mm$smoke_init
+summary(mm$smoke_init_2)
+head(mm)
+```
+
+```{r}
+# sex by sfh
+tapply(mm$SEX_CAL, mm$sfh2, summary)
+```
+
+
+
+```{r}
+table(mm$SEX_CAL)
+prop.table(table(mm$SEX_CAL))
+```
+
+```{r}
+table(mm$nonwhite)
+prop.table(table(mm$nonwhite))
+```
+```{r}
+mean(mm$AGE_YRS)
+sd(mm$AGE_YRS)
+```
+
+```{r}
+# test differences in smokeinit
+mod1 <- lm(smoke_init ~ sfh, data=mm)
+summary(mod1)
+
+t.test(mm$smoke_init~ mm$sfh2)
+tapply(mm$smoke_init, mm$sfh2, mean, na.rm=T)
+tapply(mm$smoke_init, mm$sfh2, sd, na.rm=T)
+
+t.test(mm$smoke_init ~ mm$parentsmoke)
+tapply(mm$smoke_init, mm$parentsmoke, mean, na.rm=T)
+tapply(mm$smoke_init, mm$parentsmoke, sd, na.rm=T)
+
+t.test(mm$smoke_init ~ mm$SEX_CAL)
+tapply(mm$smoke_init, mm$SEX_CAL, mean, na.rm=T)
+tapply(mm$smoke_init, mm$SEX_CAL, sd, na.rm=T)
+
+t.test(mm$smoke_init ~ mm$nonwhite)
+tapply(mm$smoke_init, mm$nonwhite, mean, na.rm=T)
+tapply(mm$smoke_init, mm$nonwhite, sd, na.rm=T)
+```
+
+```{r}
+# logistic regression
+gmod <- glm(ever_smoke ~ sfh + parentsmoke + nonwhite, data=mm)
+summary(gmod)
+
+  OR<-exp(cbind(OR = coef(gmod), confint(gmod))) #calculate ORs and 95% CIs
+  OR #print ORs and 95% CIs
+```
+
+
+```{r}
+# cox model
+adj.coxmod4<-coxph(Surv(smoke_init_2, ever_smoke)~sfh + parentsmoke + nonwhite, data=mm)
+summary(adj.coxmod4)
+```
+
+```{r}
+# kernel density plot
+mm2<-mm[which(mm$ever_smoke==1 & !is.na(mm$sfh2)),]#delete censored events
+ggplot(mm2, aes(smoke_init, fill=factor(sfh2),col=factor(sfh2), xlab="Age of initiation", main="Age of smoking initiation by smoke free homes")) + geom_density(alpha=.3)
+```
+
+```{r}
+# kernel density plot
+mm$parentsmoke2 <- factor(mm$parentsmoke,
+levels = c(0,1),
+labels = c("No Parent Smokes", "Parent Smokes"))
+mm3<-mm[which(mm$ever_smoke==1 & !is.na(mm$parentsmoke2)),]#delete censored events
+ggplot(mm3, aes(smoke_init, fill=factor(parentsmoke2),col=factor(parentsmoke2))) + geom_density(alpha=.3)
+```
+
+
+
+
+
+
+```{r}
+# cox curve
+my_df <- with(mm,
+               data.frame(sfh = c("0", "0","1", "1","0","0","1","1"), 
+                          parentsmoke = c("0","1","0","1","0","1","0","1"),
+                          nonwhite = c("0", "0","0","0","1","1","1","1"))
+                          )
+               
+my_df
+summary(adj.coxmod4)
+ggsurvplot(survfit(adj.coxmod4, newdata = my_df), data=mm, 
+           conf.int = FALSE,  ggtheme = theme_minimal(), 
+           alpha=0.5, ylab="Probability of Not Smoking", xlab="Age",legend.labs=c("No SFH/No parent smoke/white", "No SFH/Parent smoke/white","SFH/no parent smoke/white", "SFH/Parent smoke/white","No SFH/No parent smoke/nonwhite","No SFH/Parent smoke/nonwhite","SFH/No parent smoke/nonwhite","SFH/Parent smoke/nonwhite"))
+```
+
+
+```{r}
+# cox model no race
+adj.coxmod5<-coxph(Surv(smoke_init_2, ever_smoke)~sfh + parentsmoke, data=mm)
+summary(adj.coxmod5)
+```
+
+```{r}
+# cox curve no race (easier to read)
+my_df <- with(mm,
+               data.frame(sfh = c("0","0", "1","1"), 
+                          parentsmoke = c("0","1","0","1")
+                          )
+               )
+ggsurvplot(survfit(adj.coxmod5, newdata = my_df), data=mm, 
+           conf.int = FALSE,  ggtheme = theme_minimal(), 
+           alpha=0.8, ylab="Probability of Not Smoking", xlab="Age", 
+           legend.labs=c("No SFH/No parent smoke", "No SFH/Parent smoke", 
+                         "SFH/No parent smoke", "SFH/Parent Smoke"))
+```
+
+
+
+```{r}
+mm_psmoke <- mm[ which(mm$parentsmoke==1), ]
+mm_nopsmoke <- mm[ which(mm$parentsmoke==0), ]
+```
+
+```{r}
+adj.coxmod6<-coxph(Surv(smoke_init_2, ever_smoke)~sfh, data=mm_psmoke)
+summary(adj.coxmod6)
+adj.coxmod7<-coxph(Surv(smoke_init_2, ever_smoke)~sfh, data=mm_nopsmoke)
+summary(adj.coxmod7)
+```
+
+No evidence of a significant relationship between SFH and smoking initiation when stratified by parent smoking.
+
+
+```{r}
+gmod2 <- glm(ever_smoke ~ sfh + nonwhite, data=mm_nopsmoke)
+summary(gmod2)
+
+gmod3 <- glm(ever_smoke~ sfh + nonwhite, data=mm_psmoke)
+summary(gmod3)
+```
+
+
+
+```{r}
+# diagnostics
+ggcoxdiagnostics(adj.coxmod4, type = "deviance", sline=FALSE, ggtheme = theme_bw())#the pattern should look symmetric around zero, which it mostly does given this is a small dataset
+# this is concerning
+library(car)
+vif(gmod) # variance inflation factors 
+sqrt(vif(gmod)) > 2 # problem?
+
+vif(adj.coxmod4)
+sqrt(vif(adj.coxmod4)) > 2 # problem?
+```
+
